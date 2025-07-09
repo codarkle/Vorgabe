@@ -56,7 +56,7 @@ class FileSystem(ctypes.Structure):
 
 # creates a new filesystem using the C-Function
 def setup(fs_size):
-    fsize= ctypes.c_int();
+    fsize= ctypes.c_int()
     try:
         fsize.value = fs_size
     except:
