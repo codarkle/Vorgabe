@@ -6,56 +6,16 @@
 #include <string.h>
 
 #define PATH_MAX_LENGTH 1024
-
-int 
-path2inode(file_system *fs, char *path, int *inodeId)
-{ 
-	char path_copy[PATH_MAX_LENGTH];
-	strncpy(path_copy, path, sizeof(path_copy));
-	path_copy[sizeof(path_copy) - 1] = '\0';
-
-	//start from superblock
-	char* token = strtok(path_copy, "/");
-	int token_id = 0;
-	int notFound = 0;
-	 
-	while(token != NULL){
-		if(fs->inodes[token_id].n_type != directory){
-			//middle of path meets file, path is invalid
-			return -1;
-		}
-		//if inode is directory, direct_blocks means sub inode list
-		notFound = 1;
-		for(int i = 0 ; i < DIRECT_BLOCKS_COUNT ; i ++ ){
-			int sub_inode_id = fs->inodes[token_id].direct_blocks[i];
-			char* sub_dir = fs->inodes[sub_inode_id].name;
-			//check directory name is matched
-			if(strcmp(sub_dir, token) == 0){
-				token_id = sub_inode_id;
-				notFound = 0;
-				break;
-			}
-		}
-		token = strtok(NULL, "/");
-		if(notFound){
-			if(token == NULL){
-				*inodeId = token_id;
-				return -2; // end of path, not found
-			}
-			return -1; // middle of path, not found
-		}
-	}
-
-	*inodeId = token_id;
-	return 0;
-}
+#define ERR_NOTFOUND	-1
+#define ERR_EXIST		-2
+#define ERR_MEM_OVER	-3
 
 int 
 split_path(const char* full_path, char* dir_out, char* file_out) {
 	// Check if full_path is null or ends with '/' or not start with'/'
 	size_t len = strlen(full_path);
     if (len == 0 || full_path[len - 1] == '/' || full_path[0] != '/') {
-        return -1;  // Invalid: path
+        return ERR_NOTFOUND;  // Invalid: path
     }
 
     // Copy the input because strtok modifies the string
@@ -79,78 +39,286 @@ split_path(const char* full_path, char* dir_out, char* file_out) {
 	return 0;
 }
 
+int 
+path2inode(file_system *fs, char *path, int *inode_id)
+{   
+	char path_copy[PATH_MAX_LENGTH];
+	strncpy(path_copy, path, sizeof(path_copy));
+	path_copy[sizeof(path_copy) - 1] = '\0';
+
+	//start from superblock
+	char* token = strtok(path_copy, "/");
+	int token_id = 0;
+	int notFound = 0;
+	 
+	while(token != NULL){
+		if(fs->inodes[token_id].n_type != directory){
+			//middle of path meets file, path is invalid
+			return ERR_NOTFOUND;
+		}
+		//if inode is directory, direct_blocks means sub inode list
+		notFound = 1;
+		for(int i = 0 ; i < DIRECT_BLOCKS_COUNT ; i ++ ){
+			int sub_inode_id = fs->inodes[token_id].direct_blocks[i];
+			if(sub_inode_id != -1){
+				char* sub_dir = fs->inodes[sub_inode_id].name;
+				//check directory name is matched
+				if(strcmp(sub_dir, token) == 0){
+					token_id = sub_inode_id;
+					notFound = 0;
+					break;
+				}
+			}
+		}
+		token = strtok(NULL, "/");
+		if(notFound){
+			// if(token == NULL){
+			// 	*inode_id = token_id;
+			// 	return -4; // end of path, not found
+			// }
+			return ERR_NOTFOUND; // middle of path, not found
+		}
+	}
+
+	*inode_id = token_id;
+	return 0;
+}
+
 int
-fs_mkdir(file_system *fs, char *path)
+fs_mkinode(file_system *fs, char *path_and_name, int n_type)
 { 
 	//the path is valid
-	char parentPath[PATH_MAX_LENGTH];
-	char dirName[NAME_MAX_LENGTH];
-	if(split_path(path, parentPath, dirName) < 0){
-		return -1; // path input error
+	char parent_path[PATH_MAX_LENGTH];
+	char inode_name[NAME_MAX_LENGTH];
+	if(split_path(path_and_name, parent_path, inode_name) != 0){
+		return ERR_NOTFOUND; // path input error
 	}
 
 	//Get parent inode
-	int parent_inodeId  = 0;
-	int res = path2inode(fs, parentPath, &parent_inodeId);
-	if(res != 0){
-		return -1; //the parent path not exists
+	int parent_inode_id  = 0;
+	if(path2inode(fs, parent_path, &parent_inode_id) != 0 || fs->inodes[parent_inode_id].n_type != directory){
+		return ERR_NOTFOUND; //the parent directory not exists
 	}
 	
-	// Check if directory already exists
+	// Check if directory/file already exists
     for (int i = 0; i < DIRECT_BLOCKS_COUNT; i++) {
-        int child_id = fs->inodes[parent_inodeId].direct_blocks[i];
+        int child_id = fs->inodes[parent_inode_id].direct_blocks[i];
         if (child_id == -1) continue;
-        if (strcmp(fs->inodes[child_id].name, dirName) == 0) {
-            return -2; // Directory already exists
+        if (strcmp(fs->inodes[child_id].name, inode_name) == 0) {
+            return ERR_EXIST; // directory/file already exists
         }
     }
 
 	//find free Inode
-	int freeInodeId = -1;
+	int free_inode_id = -1;
 	for(int i = 0 ; i < fs->s_block->num_blocks ; i ++){
 		if(fs->inodes[i].n_type == free_block){
-			freeInodeId = i;
+			free_inode_id = i;
 			break;
 		}
 	}
-	if(freeInodeId < 0){
-		return -3; //memory is full
+	if(free_inode_id < 0){
+		return ERR_MEM_OVER; //memory is full
 	}
 	
 	// attach to parent
 	int added = 0;
 	for(int i = 0 ; i < DIRECT_BLOCKS_COUNT ; i ++){
-		if(fs->inodes[parent_inodeId].direct_blocks[i] == -1){
-			fs->inodes[parent_inodeId].direct_blocks[i] = freeInodeId;
+		if(fs->inodes[parent_inode_id].direct_blocks[i] == -1){
+			fs->inodes[parent_inode_id].direct_blocks[i] = free_inode_id;
 			added = 1;
 			break;
 		}
 	}
 	if(!added){
-		return -3; // No space in parent inode's direct blocks
+		return ERR_MEM_OVER; // No space in parent inode's direct blocks
 	}
 
-	// initialize new directory inode
-	inode *new_dir = &fs->inodes[freeInodeId];
-    inode_init(new_dir);
-	strncpy(new_dir->name, dirName, NAME_MAX_LENGTH);
-	fs->inodes[freeInodeId].name[NAME_MAX_LENGTH - 1] = '\0';
-	fs->inodes[freeInodeId].n_type = directory;
-	fs->inodes[freeInodeId].parent = parent_inodeId;
+	// initialize new inode
+	inode *new_inode = &fs->inodes[free_inode_id];
+    inode_init(new_inode);
+	strncpy(new_inode->name, inode_name, NAME_MAX_LENGTH);
+	new_inode->name[NAME_MAX_LENGTH - 1] = '\0';
+	new_inode->n_type = n_type;
+	new_inode->parent = parent_inode_id;
 
 	return 0; 
+}
+
+void get_inode_property(file_system *fs, int inode_id, int *inodecnt, int *blockcnt)
+{
+	if(fs->inodes[inode_id].n_type == reg_file){
+		(*inodecnt) ++;
+		for(int i = 0 ; i < DIRECT_BLOCKS_COUNT ; i ++){
+			if(fs->inodes[inode_id].direct_blocks[i] != -1){
+				(*blockcnt) ++;
+			}
+		}
+	}
+	else if(fs->inodes[inode_id].n_type == directory){
+		(*inodecnt) ++;
+		for(int i = 0 ; i < DIRECT_BLOCKS_COUNT ; i ++){
+			int subId = fs->inodes[inode_id].direct_blocks[i];
+			if(subId != -1){
+				get_inode_property(fs, subId, inodecnt, blockcnt);
+			}
+		}
+	}
+}
+
+int
+fs_mkdir(file_system *fs, char *path)
+{
+	return fs_mkinode(fs, path, directory);
 }
 
 int
 fs_mkfile(file_system *fs, char *path_and_name)
 {
-	return -1;
+	return fs_mkinode(fs, path_and_name, reg_file);
+}
+
+int 
+inode_copy(file_system *fs, int src_inode_id, int dst_parent_inode_id, char *dst_name)
+{
+	//input value is valid
+	if(src_inode_id >= fs->s_block->num_blocks || fs->inodes[src_inode_id].n_type == free_block ||
+		dst_parent_inode_id >= fs->s_block->num_blocks || fs->inodes[dst_parent_inode_id].n_type != directory || 
+			strlen(dst_name) == 0){
+				return ERR_NOTFOUND;
+	}
+
+	// Check for name collision
+	inode *parent_inode = &fs->inodes[dst_parent_inode_id];
+	for (int i = 0; i < DIRECT_BLOCKS_COUNT; i++) {
+		int child_id = parent_inode->direct_blocks[i];
+		if (child_id != -1 && strcmp(fs->inodes[child_id].name, dst_name) == 0) {
+			return ERR_EXIST; // name already exists
+		}
+	}
+
+	//find free Inode
+	int new_inode_id = -1;
+	for(int i = 0 ; i < fs->s_block->num_blocks ; i ++){
+		if(fs->inodes[i].n_type == free_block){
+			new_inode_id = i;
+			break;
+		}
+	}
+	if(new_inode_id < 0){
+		return ERR_MEM_OVER; //memory is full
+	}
+
+	
+	// Attach to parent
+	int added = 0;
+	for (int i = 0; i < DIRECT_BLOCKS_COUNT; i++) {
+		if (parent_inode->direct_blocks[i] == -1) {
+			parent_inode->direct_blocks[i] = new_inode_id;
+			added = 1;
+			break;
+		}
+	}
+	if (!added) {
+		return ERR_MEM_OVER;  // No space in parent inode's direct blocks
+	}
+
+	//fill data in dst inode
+	inode *dst_inode = &fs->inodes[new_inode_id];
+	inode_init(dst_inode);
+
+	inode *src_inode = &fs->inodes[src_inode_id];
+	dst_inode->n_type = src_inode->n_type;
+	dst_inode->parent = dst_parent_inode_id;
+	strncpy(dst_inode->name, dst_name, NAME_MAX_LENGTH);
+	dst_inode->name[NAME_MAX_LENGTH - 1] = '\0';
+ 
+	// Copy data blocks if src_inode.n_type == reg_file
+	for (int i = 0; i < DIRECT_BLOCKS_COUNT; i++) {
+		int src_block_id = src_inode->direct_blocks[i];
+		if (src_block_id == -1) {
+			continue;
+		}
+
+		if(src_inode->n_type == directory){
+			char *child_name = fs->inodes[src_block_id].name;
+			int res = inode_copy(fs, src_block_id, new_inode_id, child_name);
+			if(res != 0){
+				return res;
+			}
+		}
+		else if(src_inode->n_type == reg_file){
+			// Find free data block
+			int new_block_id = -1;
+			for (int j = 0; j < fs->s_block->num_blocks; j++) {
+				if (fs->free_list[j] == 1) {
+					new_block_id = j;
+					fs->free_list[j] = 0;
+					break;
+				}
+			}
+			if (new_block_id == -1){
+				return ERR_MEM_OVER; // no free data blocks
+			}
+			fs->s_block->free_blocks --;
+
+			// Copy content
+			fs->data_blocks[new_block_id].size = fs->data_blocks[src_block_id].size;
+			memcpy(fs->data_blocks[new_block_id].block,
+				fs->data_blocks[src_block_id].block,
+				fs->data_blocks[src_block_id].size);
+
+			dst_inode->direct_blocks[i] = new_block_id;
+		}
+	}
+	return 0;
 }
 
 int
 fs_cp(file_system *fs, char *src_path, char *dst_path_and_name)
 {
-	return -1;
+	//find the inode of src_path	
+	int src_inode_id  = 0;
+	if(path2inode(fs, src_path, &src_inode_id) != 0){
+		return ERR_NOTFOUND; //the src node not exists
+	}
+
+	//get needed space
+	int needInodeSize = 0;
+	int needDataBlockSize = 0;
+	get_inode_property(fs, src_inode_id, &needInodeSize, &needDataBlockSize);
+
+	//get free space
+	int free_inode_size = 0;
+	int free_datablock_size = 0;
+	for(int i = 0 ; i < fs->s_block->num_blocks ; i ++){
+		if(fs->inodes[i].n_type == free_block){
+			free_inode_size ++;
+		}
+		if(fs->free_list[i] == 1){
+			free_datablock_size ++;
+		}
+	}
+
+	//check space
+	if(free_inode_size < needInodeSize || free_datablock_size < needDataBlockSize){
+		return ERR_MEM_OVER;
+	}
+
+	// Split destination path
+	char parent_path[PATH_MAX_LENGTH];
+	char dst_name[NAME_MAX_LENGTH];
+	if (split_path(dst_path_and_name, parent_path, dst_name) != 0) {
+		return ERR_NOTFOUND;
+	}
+
+	// Get parent directory inode
+    int dst_parent_inode_id;
+	if(path2inode(fs, parent_path, &dst_parent_inode_id) != 0 || fs->inodes[dst_parent_inode_id].n_type != directory){
+        return ERR_NOTFOUND; // parent dir not found
+    }
+
+	return inode_copy(fs, src_inode_id, dst_parent_inode_id, dst_name);
 }
 
 char *
