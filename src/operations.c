@@ -48,6 +48,7 @@ path2inode(file_system *fs, char *path, int *inode_id)
 
 	//start from superblock
 	char* token = strtok(path_copy, "/");
+	*inode_id = 0;
 	int token_id = 0;
 	int notFound = 0;
 	 
@@ -307,9 +308,8 @@ char *
 fs_list(file_system *fs, char *path)
 {
 	int inode_id = 0;
-	if (path2inode(fs, path, &inode_id) != 0 || fs->inodes[inode_id].n_type != directory) {
-		return NULL;
-	}
+	if (path2inode(fs, path, &inode_id) != 0)return NULL;
+	if (fs->inodes[inode_id].n_type != directory)return NULL;
 
 	// Allocate a buffer for listing
 	char *buffer = malloc(1024);
@@ -541,36 +541,68 @@ fs_import(file_system *fs, char *int_path, char *ext_path)
 
     // Read external file content
     fseek(src, 0, SEEK_END);
-    long size = ftell(src);
+    long data_len = ftell(src);
     fseek(src, 0, SEEK_SET);
-    if (size <= 0) {
+    if (data_len <= 0) {
         fclose(src);
         return ERR_NOTFOUND;
     }
 
-    char *buffer = malloc(size + 1);
-	buffer[size] = '\0';
-    if (!buffer) {
-        fclose(src);
+    uint8_t *data = malloc(data_len);
+    if (!data) {
+		fclose(src);
         return ERR_MEM_OVER;
     }
 
-    fread(buffer, 1, size, src);
+    fread(data, 1, data_len, src);
     fclose(src);
 
     // Create internal file (if it does not exist)
     int create_result = fs_mkfile(fs, int_path);
     if (create_result != 0 && create_result != ERR_EXIST) {
-        free(buffer);
+        free(data);
         return create_result;
     }
+	
+	int inode_id;
+	if (path2inode(fs, int_path, &inode_id) != 0) {
+		return ERR_NOTFOUND; // File not found
+	}
 
-    // Append content to the internal file
-    int write_result = fs_writef(fs, int_path, buffer);
-    free(buffer);
+	inode *node = &fs->inodes[inode_id]; 
 
-	if(write_result < 0){
-    	return write_result;
+	int block_index = 0;
+	size_t bytes_written = 0;
+	// Write remaining data to new blocks
+	while (bytes_written < data_len && block_index < DIRECT_BLOCKS_COUNT) {
+		int block_id = -1;
+		for (int i = 0; i < fs->s_block->num_blocks; i++) {
+			if (fs->free_list[i]) {
+				block_id = i;
+				fs->free_list[i] = 0;
+				fs->s_block->free_blocks--;
+				break;
+			}
+		}
+
+		if (block_id == -1) {
+			return ERR_MEM_OVER; // No free block
+		}
+
+		size_t chunk_size = data_len - bytes_written;
+		if (chunk_size > BLOCK_SIZE)
+			chunk_size = BLOCK_SIZE;
+
+		memcpy(fs->data_blocks[block_id].block, data + bytes_written, chunk_size);
+		fs->data_blocks[block_id].size = chunk_size;
+
+		node->direct_blocks[block_index++] = block_id;
+		bytes_written += chunk_size;
+		node->size += chunk_size;
+	}
+
+	if (bytes_written < data_len) {
+		return ERR_MEM_OVER;
 	}
 
 	return 0;
