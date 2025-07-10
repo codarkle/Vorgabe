@@ -47,60 +47,79 @@ main(int argc, const char *argv[])
 			continue;
 		}
 		char *command = strtok(input_buf, " \n");
+		
 		if(command == NULL){
-			LOG("Unknown command\nValid commands:\nlist\nmkfile\nmakedir\ncp\nrm\nexport\nimport\nwritef\nreadf\ndump\n");
+			LOG("  Unknown command\nValid commands:\nlist\nmkfile\nmakedir\ncp\nrm\nexport\nimport\nwritef\nreadf\ndump\n");
 			free(input_buf);
 			continue;
 		}
 
 		//determine which command to execute (only our build in commands are possible)
+		int res = -4;
 		if (!strcmp(command, "mkdir")) {
-			LOG("Chosen mkdir\n");
-			fs_mkdir(fs, strtok(NULL, " \n"));
+			res = fs_mkdir(fs, strtok(NULL, " \n"));
 		} else if (!strcmp(command, "mkfile")) {
-			fs_mkfile(fs, strtok(NULL, " \n"));
-			LOG("Chosen mkfile\n");
+			res = fs_mkfile(fs, strtok(NULL, " \n"));
 		} else if (strcmp(command, "cp") == 0) {
-        fs_cp(fs, strtok(NULL, " \n"),  strtok(NULL, " \n"));
-				LOG ("Chosen Copyfile\n");
-    } else if (!strcmp(command, "list")) {
-			LOG("Chosen list\n");
-			char *output = fs_list(fs, strtok(NULL, " \n"));
-			printf("%s", output);
-			free(output);
+        	res = fs_cp(fs, strtok(NULL, " \n"),  strtok(NULL, " \n"));
+    	} else if (!strcmp(command, "list")) {
+			char *output = (char *)fs_list(fs, strtok(NULL, " \n"));
+			if(output){
+				fwrite(output, strlen(output), 1, stdout);
+				fflush(stdout);
+				free(output);
+			}
+			else{
+				LOG("  Failed\n");
+			}
 		} else if (!strcmp(command, "writef")) {
 			char *path = strtok(NULL, " \n");
 			char *text = strtok(NULL, "\0");
-			fs_writef(fs, path, text);
-			LOG("Chosen writef\n");
+			res = fs_writef(fs, path, text);
 		} else if (!strcmp(command, "readf")) {
-			LOG("Chosen readf\n");
 			int file_size = 0;
 			char *output  = (char *)fs_readf(fs, strtok(NULL, " \n"), &file_size);
-			fwrite(output, file_size, 1, stdout);
-			fflush(stdout);
-			free(output);
+			if(output){
+				fwrite(output, file_size, 1, stdout);
+				fflush(stdout);
+				free(output);
+				LOG("\n")
+			}
+			else{
+				LOG("  Failed\n");
+			}
 		} else if (!strcmp(command, "rm")) {
-			LOG("Chosen rm\n");
-			fs_rm(fs, strtok(NULL, " \n"));
+			res = fs_rm(fs, strtok(NULL, " \n"));
 		} else if (!strcmp(command, "export")) {
 			char *int_path = strtok(NULL, " \n");
 			char *ext_path = strtok(NULL, "\0");
-			fs_export(fs, int_path, ext_path);
-			LOG("Chosen export\n");
+			res = fs_export(fs, int_path, ext_path);
 		} else if (!strcmp(command, "import")) {
 			char *int_path = strtok(NULL, " \n");
 			char *ext_path = strtok(NULL, "\0");
-			fs_import(fs, int_path, ext_path);
+			res = fs_import(fs, int_path, ext_path);
 		} else if (!strcmp(command, "dump")) {
-			LOG("Saving filesystem to disk\n");
-			fs_dump(fs, argv[2]);
+			res = fs_dump(fs, argv[2]);
 		} else if (!strcmp(command, "exit") || !strcmp(command, "quit")) {
 			cleanup(fs);
 			free(input_buf);
 			exit(0);
 		} else {
-			LOG("Unknown command\nValid commands:\nlist\nmkfile\nmakedir\ncp\nrm\nexport\nimport\nwritef\nreadf\ndump\n");
+			LOG("  Unknown command\nValid commands:\nlist\nmkfile\nmakedir\ncp\nrm\nexport\nimport\nwritef\nreadf\ndump\n");
+		}
+
+		if(res != -4){
+			char output[20];
+			switch(res){
+				case 0:		sprintf(output, "  success!\n"); break;
+				case -1:	sprintf(output, "  not found!\n"); break;
+				case -2:	sprintf(output, "  already exist!\n"); break;
+				case -3:	sprintf(output, "  memory overflow!\n"); break;
+				default:	sprintf(output, "  result:%d\n",res); break;
+			}
+			
+			fwrite(output, strlen(output), 1, stdout);
+			fflush(stdout);
 		}
 		free(input_buf);
 	}
