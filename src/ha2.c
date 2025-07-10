@@ -61,13 +61,15 @@ main(int argc, const char *argv[])
 			fs_mkfile(fs, strtok(NULL, " \n"));
 			LOG("Chosen mkfile\n");
 		} else if (strcmp(command, "cp") == 0) {
-        fs_cp(fs, strtok(NULL, " \n"),  strtok(NULL, " \n"));
-				LOG ("Chosen Copyfile\n");
-    } else if (!strcmp(command, "list")) {
-			LOG("Chosen list\n");
-			char *output = fs_list(fs, strtok(NULL, " \n"));
-			printf("%s", output);
+        	fs_cp(fs, strtok(NULL, " \n"),  strtok(NULL, " \n"));
+			LOG ("Chosen Copyfile\n");
+    	} else if (!strcmp(command, "list")) {
+			LOG("Chosen list\n"); 
+			char *output = (char *)fs_list(fs, strtok(NULL, " \n"));
+			fwrite(output, strlen(output), 1, stdout);
+			fflush(stdout);
 			free(output);
+			LOG ("");
 		} else if (!strcmp(command, "writef")) {
 			char *path = strtok(NULL, " \n");
 			char *text = strtok(NULL, "\0");

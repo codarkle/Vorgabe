@@ -312,13 +312,15 @@ fs_list(file_system *fs, char *path)
 	}
 
 	// Allocate a buffer for listing
-	static char buffer[1024];
-	buffer[0] = '\0'; // empty string
+	char *buffer = malloc(1024);
+	if (!buffer) return NULL;
+	buffer[0] = '\0';
 
 	for (int i = 0; i < DIRECT_BLOCKS_COUNT; i++) {
 		int child_id = fs->inodes[inode_id].direct_blocks[i];
 		if (child_id != -1) {
 			int child_type = fs->inodes[child_id].n_type;
+			if(child_type == free_block) continue;
 			if(child_type == reg_file){
 				strcat(buffer, "FIL ");
 			}else if(child_type == directory){
@@ -463,7 +465,7 @@ fs_readf(file_system *fs, char *filename, int *file_size)
             offset += size;
         }
     }
-
+	
     *file_size = total_size;
     return buffer;
 }
