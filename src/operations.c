@@ -238,6 +238,7 @@ inode_copy(file_system *fs, int src_inode_id, int dst_parent_inode_id, char *dst
 			       fs->data_blocks[src_block_id].size);
 
 			fs->inodes[new_inode_id].direct_blocks[i] = new_block_id;
+			fs->inodes[new_inode_id].size += fs->data_blocks[src_block_id].size;
 		}
 	}
 
@@ -378,6 +379,7 @@ fs_writef(file_system *fs, char *filename, char *text)
             memcpy(blk->block + blk->size, text, to_write);
             blk->size += to_write;
             bytes_written += to_write;
+			node->size += to_write;
         }
     }
 
@@ -407,11 +409,12 @@ fs_writef(file_system *fs, char *filename, char *text)
 
 		node->direct_blocks[block_index++] = block_id;
 		bytes_written += chunk_size;
+		node->size += chunk_size;
 	} 
 
 	// Not enough blocks available
     if (bytes_written < text_len) {
-        // return ERR_MEM_OVER;
+        return ERR_MEM_OVER;
     }
 
 	return bytes_written;
@@ -465,21 +468,146 @@ fs_readf(file_system *fs, char *filename, int *file_size)
     return buffer;
 }
 
-
 int
 fs_rm(file_system *fs, char *path)
 {
-	return -1;
+	if (strlen(path) < 1) return ERR_NOTFOUND;
+
+    int inode_id;
+    if (path2inode(fs, path, &inode_id) != 0) {
+        return ERR_NOTFOUND; // path not found
+    }
+
+    inode *target = &fs->inodes[inode_id];
+
+    // Cannot remove root directory
+    if (inode_id == 0) return ERR_NOTFOUND;
+
+    // Step 1: Recursively remove contents if it's a directory
+    if (target->n_type == directory) {
+        for (int i = 0; i < DIRECT_BLOCKS_COUNT; i++) {
+            int child_id = target->direct_blocks[i];
+            if (child_id != -1) {
+                char child_path[PATH_MAX_LENGTH];
+                snprintf(child_path, sizeof(child_path), "%s/%s", path, fs->inodes[child_id].name);
+                fs_rm(fs, child_path);
+            }
+        }
+    }
+
+    // Step 2: Free data blocks if it's a file
+    if (target->n_type == reg_file) {
+        for (int i = 0; i < DIRECT_BLOCKS_COUNT; i++) {
+            int block_id = target->direct_blocks[i];
+            if (block_id != -1) {
+                fs->free_list[block_id] = 1;
+                fs->s_block->free_blocks++;
+                target->direct_blocks[i] = -1;
+            }
+        }
+    }
+     
+    // Step 3: Remove inode from parent directory
+    int parent_id = target->parent;
+    if (parent_id >= 0 && parent_id < fs->s_block->num_blocks) {
+        inode *parent = &fs->inodes[parent_id];
+        for (int i = 0; i < DIRECT_BLOCKS_COUNT; i++) {
+            if (parent->direct_blocks[i] == inode_id) {
+                parent->direct_blocks[i] = -1;
+                break;
+            }
+        }
+    }
+
+    // Step 4: Free inode
+    inode_init(target);
+    target->n_type = free_block;
+
+    return 0;
 }
 
 int
 fs_import(file_system *fs, char *int_path, char *ext_path)
 {
-	return -1;
+	if (!int_path || !ext_path) return ERR_NOTFOUND;
+
+    // Open external file for reading
+    FILE *src = fopen(ext_path, "rb");
+    if (!src) {
+        return ERR_NOTFOUND; // Cannot find or open external file
+    }
+
+    // Read external file content
+    fseek(src, 0, SEEK_END);
+    long size = ftell(src);
+    fseek(src, 0, SEEK_SET);
+    if (size <= 0) {
+        fclose(src);
+        return ERR_NOTFOUND;
+    }
+
+    char *buffer = malloc(size + 1);
+	buffer[size] = '\0';
+    if (!buffer) {
+        fclose(src);
+        return ERR_MEM_OVER;
+    }
+
+    fread(buffer, 1, size, src);
+    fclose(src);
+
+    // Create internal file (if it does not exist)
+    int create_result = fs_mkfile(fs, int_path);
+    if (create_result != 0 && create_result != ERR_EXIST) {
+        free(buffer);
+        return create_result;
+    }
+
+    // Append content to the internal file
+    int write_result = fs_writef(fs, int_path, buffer);
+    free(buffer);
+
+	if(write_result < 0){
+    	return write_result;
+	}
+
+	return 0;
 }
 
 int
 fs_export(file_system *fs, char *int_path, char *ext_path)
 {
-	return -1;
+	if (!int_path || !ext_path) return ERR_NOTFOUND;
+
+    // Locate the internal file inode
+    int inode_id;
+    if (path2inode(fs, int_path, &inode_id) != 0) {
+        return ERR_NOTFOUND;
+    }
+
+    inode *file_inode = &fs->inodes[inode_id];
+    if (file_inode->n_type != reg_file) {
+        return ERR_NOTFOUND;  // Not a file
+    }
+
+    // Open the external file for writing
+    FILE *dst = fopen(ext_path, "wb");
+    if (!dst) {
+        return ERR_NOTFOUND;
+    }
+
+    // Write all data blocks in order
+    for (int i = 0; i < DIRECT_BLOCKS_COUNT; ++i) {
+        int block_id = file_inode->direct_blocks[i];
+        if (block_id == -1) continue;
+
+        data_block *blk = &fs->data_blocks[block_id];
+        if (fwrite(blk->block, 1, blk->size, dst) != blk->size) {
+            fclose(dst);
+            return ERR_MEM_OVER;  // Disk write error
+        }
+    }
+
+    fclose(dst);
+    return 0;
 }
