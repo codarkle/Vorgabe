@@ -45,9 +45,9 @@ main(int argc, const char *argv[])
 			linenoiseHistoryAdd(input_buf);
 		} else {
 			continue;
-		} 
-
-		char *command = argv[0];
+		}
+		char *command = strtok(input_buf, " \n");
+		
 		if(command == NULL){
 			LOG("Unknown command\nValid commands:\nlist\nmkfile\nmakedir\ncp\nrm\nexport\nimport\nwritef\nreadf\ndump\n");
 			free(input_buf);
