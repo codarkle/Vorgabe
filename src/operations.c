@@ -15,13 +15,15 @@
 // Get inode from relative path
 int path2inode(file_system *fs, char *path, int *inode_id)
 {   
+	if(!path || !inode_id) return ERR_NOTFOUND;
+
 	char path_copy[PATH_MAX_LENGTH];
 	strncpy(path_copy, path, sizeof(path_copy));
 	path_copy[sizeof(path_copy) - 1] = '\0';
 
-	//Start from superblock
+	//start from superblock
 	char* token = strtok(path_copy, "/");
-	int token_id = *inode_id;
+	int token_id = 0;
 	 
 	while(token != NULL){
 		if(fs->inodes[token_id].n_type != directory){
@@ -73,7 +75,10 @@ int fullpath2inode(file_system *fs, const char* full_path, int *parent_dir_id, c
     if (last_slash != NULL) {
         // Separate directory and file
         *last_slash = '\0'; // Cut the string at the slash
-        strcpy(parent_path, path_copy);      // directory path
+		if (strlen(path_copy) == 0)
+			strcpy(parent_path, "/"); //this is used when last slash is root
+		else
+			strcpy(parent_path, path_copy);
         strcpy(file_out, last_slash + 1); // file name
     } else {
         // No slash found — only a file name
@@ -101,7 +106,7 @@ int inode_create(file_system *fs, int parent_inode_id, char *dst_name, int n_typ
 		}
 	}
 
-	// Find free Inode
+	//find free Inode
 	int new_inode_id = -1;
 	for(int i = 0 ; i < fs->s_block->num_blocks ; i ++){
 		if(fs->inodes[i].n_type == free_block){
@@ -109,7 +114,7 @@ int inode_create(file_system *fs, int parent_inode_id, char *dst_name, int n_typ
 			break;
 		}
 	}
-	if(new_inode_id < 0) return ERR_MEM_OVER;  
+	if(new_inode_id < 0) return ERR_MEM_OVER; 
 	
 	// Attach to parent
 	int added = 0;
@@ -120,29 +125,76 @@ int inode_create(file_system *fs, int parent_inode_id, char *dst_name, int n_typ
 			break;
 		}
 	}
-	if (!added)  return ERR_MEM_OVER;
+	if (!added) return ERR_MEM_OVER;  
 
 	//init inode
 	inode *dst_inode = &fs->inodes[new_inode_id];
 	inode_init(dst_inode);
-	strncpy(dst_inode->name, dst_name, NAME_MAX_LENGTH - 1);
+	dst_inode->parent = parent_inode_id;
+	strncpy(dst_inode->name, dst_name, NAME_MAX_LENGTH);
 	dst_inode->name[NAME_MAX_LENGTH - 1] = '\0';
 	dst_inode->n_type = n_type;
-	dst_inode->parent = parent_inode_id;
 
 	return new_inode_id;
 }
 
-//Copy the inode and it's children recursively.
-int inode_copy(file_system *fs, int src_inode_id, int dst_parent_inode_id, char *dst_name)
-{ 
+// Calculate the number of used inodes and blocks recursively.
+void inode_property(file_system *fs, int inode_id, int *inodecnt, int *blockcnt)
+{
+	if(fs->inodes[inode_id].n_type == reg_file){
+		(*inodecnt) ++;
+		for(int i = 0 ; i < DIRECT_BLOCKS_COUNT ; i ++){
+			if(fs->inodes[inode_id].direct_blocks[i] != -1){
+				(*blockcnt) ++;
+			}
+		}
+	}
+	else if(fs->inodes[inode_id].n_type == directory){
+		(*inodecnt) ++;
+		for(int i = 0 ; i < DIRECT_BLOCKS_COUNT ; i ++){
+			int subId = fs->inodes[inode_id].direct_blocks[i];
+			if(subId != -1){
+				inode_property(fs, subId, inodecnt, blockcnt);
+			}
+		}
+	}
+}
+
+// One function for fs_mkdir and fs_mkfile
+int inode_make(file_system *fs, char *path, int n_type)
+{
+	if(!fs || !path) return ERR_NOTFOUND;
+	// check the path is valid
+	char inode_name[NAME_MAX_LENGTH];
+	int parent_inode_id  = 0;
+	if(fullpath2inode(fs, path, &parent_inode_id, inode_name) != 0) return ERR_NOTFOUND; 
+
+	// inode create
+	int res = inode_create(fs, parent_inode_id, inode_name, n_type);
+	return res < 0? res:0;
+}
+
+int
+fs_mkdir(file_system *fs, char *path)
+{
+	return inode_make(fs, path, directory);
+}
+
+int
+fs_mkfile(file_system *fs, char *path_and_name)
+{
+	return inode_make(fs, path_and_name, reg_file);
+}
+
+int 
+inode_copy(file_system *fs, int src_inode_id, int dst_parent_inode_id, char *dst_name)
+{
 	//src inode
 	inode *src_inode = &fs->inodes[src_inode_id];
 
 	//dst inode
-	int res = inode_create(fs, dst_parent_inode_id, dst_name, src_inode->n_type);
-	if(res < 0) return res;
-	int new_inode_id = res;
+	int new_inode_id = inode_create(fs, dst_parent_inode_id, dst_name, src_inode->n_type);
+	if(new_inode_id < 0) return new_inode_id; 
  
 	// Handle regular file copy
 	if (src_inode->n_type == reg_file) {
@@ -189,54 +241,6 @@ int inode_copy(file_system *fs, int src_inode_id, int dst_parent_inode_id, char 
 	return 0;
 }
 
-// Calculate the number of used inodes and blocks recursively.
-void inode_property(file_system *fs, int inode_id, int *inodecnt, int *blockcnt)
-{
-	if(fs->inodes[inode_id].n_type == reg_file){
-		(*inodecnt) ++;
-		for(int i = 0 ; i < DIRECT_BLOCKS_COUNT ; i ++){
-			if(fs->inodes[inode_id].direct_blocks[i] != -1){
-				(*blockcnt) ++;
-			}
-		}
-	}
-	else if(fs->inodes[inode_id].n_type == directory){
-		(*inodecnt) ++;
-		for(int i = 0 ; i < DIRECT_BLOCKS_COUNT ; i ++){
-			int subId = fs->inodes[inode_id].direct_blocks[i];
-			if(subId != -1){
-				inode_property(fs, subId, inodecnt, blockcnt);
-			}
-		}
-	}
-}
-
-// One function for fs_mkdir and fs_mkfile
-int inode_make(file_system *fs, char *path, int n_type)
-{
-	if(!fs || !path) return ERR_NOTFOUND;
-	// check the path is valid
-	char inode_name[NAME_MAX_LENGTH];
-	int parent_inode_id  = 0;
-	if(fullpath2inode(fs, path, parent_inode_id, inode_name) != 0) return ERR_NOTFOUND; 
-
-	// inode create
-	int res = inode_create(fs, parent_inode_id, inode_name, n_type);
-	return min(res, 0);
-}
-
-int
-fs_mkdir(file_system *fs, char *path)
-{
-	return inode_make(fs, path, directory);
-}
-
-int
-fs_mkfile(file_system *fs, char *path_and_name)
-{
-	return inode_make(fs, path_and_name, reg_file);
-}
-
 int
 fs_cp(file_system *fs, char *src_path, char *dst_path_and_name)
 {
@@ -244,7 +248,7 @@ fs_cp(file_system *fs, char *src_path, char *dst_path_and_name)
 
 	//find the inode of src_path	
 	int src_inode_id  = 0;
-	if(path2inode(fs, src_path, &src_inode_id) != 0) return ERR_NOTFOUND;  
+	if(path2inode(fs, src_path, &src_inode_id) != 0) return ERR_NOTFOUND; 
 
 	//get needed space
 	int need_inode_size = 0;
@@ -271,7 +275,7 @@ fs_cp(file_system *fs, char *src_path, char *dst_path_and_name)
 	// destination inode
 	char dst_name[NAME_MAX_LENGTH];
     int dst_parent_inode_id = 0;
-	if (fullpath2inode(fs, dst_path_and_name, dst_parent_inode_id, dst_name) != 0)  return ERR_NOTFOUND;
+	if (fullpath2inode(fs, dst_path_and_name, &dst_parent_inode_id, dst_name) != 0)  return ERR_NOTFOUND;
 
 	// Get parent directory inode
 	return inode_copy(fs, src_inode_id, dst_parent_inode_id, dst_name);
@@ -288,6 +292,7 @@ fs_list(file_system *fs, char *path)
 
 	// Allocate a buffer for listing
 	char *buffer = malloc(1024);
+	if (!buffer) return NULL;
 	buffer[0] = '\0';
 
 	for (int i = 0; i < DIRECT_BLOCKS_COUNT; i++) {
@@ -296,7 +301,7 @@ fs_list(file_system *fs, char *path)
 			int child_type = fs->inodes[child_id].n_type;
 			if(child_type == free_block) continue;
 			if(child_type == reg_file){
-				strcat(buffer, "FILE ");
+				strcat(buffer, "FIL ");
 			}else if(child_type == directory){
 				strcat(buffer, "DIR ");
 			}
@@ -313,11 +318,10 @@ fs_writef(file_system *fs, char *filename, char *text)
 {
 	if (!fs || !filename || !text) return ERR_NOTFOUND;
 
-	// Find inode from filename
 	int inode_id;
 	if (path2inode(fs, filename, &inode_id) != 0) return ERR_NOTFOUND;  
 	inode *node = &fs->inodes[inode_id];
-	if (node->n_type != reg_file) return ERR_NOTFOUND;  
+	if (node->n_type != reg_file) return ERR_NOTFOUND;
 
 	// Skip exist data blocks
 	int block_index = 0;
@@ -364,7 +368,7 @@ fs_writef(file_system *fs, char *filename, char *text)
 				break;
 			}
 		}
-		if (block_id == -1)  return ERR_MEM_OVER;  
+		if (block_id == -1) return ERR_MEM_OVER;  
 
 		// Write chunk
 		size_t chunk_size = text_len - bytes_written;
@@ -380,7 +384,9 @@ fs_writef(file_system *fs, char *filename, char *text)
 	} 
 
 	// Not enough blocks available
-    if (bytes_written < text_len) return ERR_MEM_OVER;
+    if (bytes_written < text_len) {
+        return ERR_MEM_OVER;
+    }
 
 	return bytes_written;
 }
@@ -390,11 +396,10 @@ fs_readf(file_system *fs, char *filename, int *file_size)
 {
 	if (!fs || !filename || !file_size) return NULL;
 
-	// Get target inode
 	int inode_id;
     if (path2inode(fs, filename, &inode_id) != 0)  return NULL;
     inode *node = &fs->inodes[inode_id];
-    if (node->n_type != reg_file)  return NULL;
+    if (node->n_type != reg_file) return NULL;
 
     // Calculate total file size
     int total_size = 0;
@@ -432,9 +437,9 @@ fs_rm(file_system *fs, char *path)
 {
 	if (!fs || !path) return ERR_NOTFOUND;
 
-	// Get target inode
     int inode_id;
-    if (path2inode(fs, path, &inode_id) != 0)  return ERR_NOTFOUND;  
+    if (path2inode(fs, path, &inode_id) != 0) return ERR_NOTFOUND; 
+
     inode *target = &fs->inodes[inode_id];
 
     // Cannot remove root directory
@@ -490,7 +495,7 @@ fs_import(file_system *fs, char *int_path, char *ext_path)
 
     // Open external file for reading
     FILE *src = fopen(ext_path, "rb");
-    if (!src)  return ERR_NOTFOUND;  
+    if (!src) return ERR_NOTFOUND;  
 
     // Read external file content
     fseek(src, 0, SEEK_END);
@@ -518,7 +523,11 @@ fs_import(file_system *fs, char *int_path, char *ext_path)
     }
 	
 	int inode_id;
-	if (path2inode(fs, int_path, &inode_id) != 0)  return ERR_NOTFOUND; 
+	if (path2inode(fs, int_path, &inode_id) != 0){
+        free(data);
+		return ERR_NOTFOUND; 
+	}
+
 	inode *node = &fs->inodes[inode_id]; 
 
 	// clear origin data blocks
@@ -530,10 +539,12 @@ fs_import(file_system *fs, char *int_path, char *ext_path)
 			node->direct_blocks[i] = -1;
 		}
 	}
+	node->size = 0;
 
 	// Write remaining data to new blocks
 	int block_index = 0;
 	size_t bytes_written = 0;
+	// Write remaining data to new blocks
 	while (bytes_written < data_len && block_index < DIRECT_BLOCKS_COUNT) {
 		// find emptry block
 		int block_id = -1;
@@ -545,9 +556,11 @@ fs_import(file_system *fs, char *int_path, char *ext_path)
 				break;
 			}
 		}
-		if (block_id == -1)  return ERR_MEM_OVER; 
+		if (block_id == -1){
+			free(data);
+			return ERR_MEM_OVER; 
+		}  
 
-		// Segment can be written BLOCK_SIZE as Maximum
 		size_t chunk_size = data_len - bytes_written;
 		if (chunk_size > BLOCK_SIZE)
 			chunk_size = BLOCK_SIZE;
@@ -560,8 +573,11 @@ fs_import(file_system *fs, char *int_path, char *ext_path)
 		node->size += chunk_size;
 	}
 
+	free(data);
 	// Not enough blocks available
-	if (bytes_written < data_len)  return ERR_MEM_OVER;
+	if (bytes_written < data_len){
+		return ERR_MEM_OVER;
+	}
 
 	return 0;
 }
@@ -575,7 +591,7 @@ fs_export(file_system *fs, char *int_path, char *ext_path)
     int inode_id;
     if (path2inode(fs, int_path, &inode_id) != 0)  return ERR_NOTFOUND;
     inode *file_inode = &fs->inodes[inode_id];
-    if (file_inode->n_type != reg_file)  return ERR_NOTFOUND;
+    if (file_inode->n_type != reg_file)  return ERR_NOTFOUND;  
 
     // Open the external file for writing
     FILE *dst = fopen(ext_path, "wb");
