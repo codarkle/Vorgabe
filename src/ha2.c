@@ -36,7 +36,6 @@ main(int argc, const char *argv[])
 		exit(1);
 	}
 
-
 	linenoiseHistorySetMaxLen(20);
 
 	while (1) {
@@ -70,7 +69,7 @@ main(int argc, const char *argv[])
 				free(output);
 			}
 			else{
-				res = -4;
+				res = -2;
 			}
 		} else if (!strcmp(command, "writef")) {
 			char *path = strtok(NULL, " \n");
@@ -86,7 +85,7 @@ main(int argc, const char *argv[])
 				LOG("\n")
 			}
 			else{
-				res = -4;
+				res = -2;
 			}
 		} else if (!strcmp(command, "rm")) {
 			res = fs_rm(fs, strtok(NULL, " \n"));
@@ -112,9 +111,8 @@ main(int argc, const char *argv[])
 			char output[20];
 			switch(res){
 				case -1:	sprintf(output, "not found!"); break;
-				case -2:	sprintf(output, "already exist!"); break;
-				case -3:	sprintf(output, "memory overflow!"); break;
-				case -4:	sprintf(output, "failed!"); break;
+				case -2:	sprintf(output, "already exist"); break; 
+				case -3:	sprintf(output, "memory overflow"); break; 
 			}
 			fwrite(output, strlen(output), 1, stdout);
 			fflush(stdout);
