@@ -111,8 +111,7 @@ main(int argc, const char *argv[])
 			char output[20];
 			switch(res){
 				case -1:	sprintf(output, "not found!"); break;
-				case -2:	sprintf(output, "already exist"); break; 
-				case -3:	sprintf(output, "memory overflow"); break; 
+				case -2:	sprintf(output, "failed"); break; 
 			}
 			fwrite(output, strlen(output), 1, stdout);
 			fflush(stdout);
